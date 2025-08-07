@@ -19,17 +19,26 @@ spring:
               order: 1
 
             # ========== 뉴스 도메인 (네임스페이스 명시: /api/news/*) ==========
-            # 2. 뉴스 서비스 - 프리미엄 콘텐츠 (JWT 검증 필요)
-            - id: news-premium
+            # 2. 뉴스 서비스 - 프리미엄 콘텐츠 리스트 조회 (JWT 검증 불필요)
+            - id: news-premium-list
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/premium
+              filters:
+                - RewritePath=/api/news/articles/premium, /api/articles/premium
+              order: 2
+
+            # 3. 뉴스 서비스 - 프리미엄 콘텐츠 상세 조회 (JWT 검증 필요)
+            - id: news-premium-detail
               uri: http://localhost:8080
               predicates:
                 - Path=/api/news/articles/premium/**
               filters:
                 - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
                 - name: AuthorizationHeaderFilter
-              order: 2
+              order: 3
             
-            # 3. 뉴스 서비스 - 관리 작업 (JWT 검증 필요)
+            # 4. 뉴스 서비스 - 관리 작업 (JWT 검증 필요)
             - id: news-management
               uri: http://localhost:8080
               predicates:
@@ -38,19 +47,19 @@ spring:
               filters:
                 - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
                 - name: AuthorizationHeaderFilter
-              order: 3
+              order: 4
             
-            # 4. 뉴스 서비스 - 일반 조회 (JWT 검증 불필요)
+            # 5. 뉴스 서비스 - 일반 조회 (JWT 검증 불필요)
             - id: news-articles
               uri: http://localhost:8080
               predicates:
                 - Path=/api/news/articles/**
               filters:
                 - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
-              order: 4
+              order: 5
 
             # ========== 인증 도메인 (네임스페이스 명시 및 버전 제거: /api/auth/*) ==========
-            # 5. 인증 서비스 - 사용자 프로필 (JWT 검증 필요)
+            # 6. 인증 서비스 - 사용자 프로필 (JWT 검증 필요)
             - id: auth-profile
               uri: http://localhost:8001
               predicates:
@@ -58,16 +67,16 @@ spring:
               filters:
                 - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
                 - name: AuthorizationHeaderFilter
-              order: 5
+              order: 6
             
-            # 6. 인증 서비스 - 로그인/회원가입 (JWT 검증 불필요)
+            # 7. 인증 서비스 - 로그인/회원가입 (JWT 검증 불필요)
             - id: auth-login
               uri: http://localhost:8001
               predicates:
                 - Path=/api/auth/**
               filters:
                 - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
-              order: 6
+              order: 7
 
 # JWT 설정
 jwt:

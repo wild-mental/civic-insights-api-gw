@@ -1,13 +1,11 @@
 package com.makersworld.civic_insights_api_gw.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
 
 /**
  * JWT 관련 설정 프로퍼티
  * application.yaml의 jwt 설정을 바인딩하여 린터 경고를 해결합니다.
  */
-@Configuration
 @ConfigurationProperties(prefix = "jwt")
 public class JwtConfigProperties {
     
