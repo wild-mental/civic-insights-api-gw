@@ -1,0 +1,732 @@
+# Civic Insights API Gateway
+
+> **마이크로서비스 아키텍처를 위한 Spring Cloud Gateway 기반 API 게이트웨이**
+
+## 📚 목차
+
+- [개요](#-개요)
+- [아키텍처](#-아키텍처)
+- [JWT와 JWK 이해하기](#-jwt와-jwk-이해하기)
+- [라우팅 스펙](#-라우팅-스펙)
+- [인증 메커니즘](#-인증-메커니즘)
+- [설정 가이드](#-설정-가이드)
+- [개발자 가이드](#-개발자-가이드)
+- [트러블슈팅](#-트러블슈팅)
+
+---
+
+## 🌟 개요
+
+Civic Insights API Gateway는 마이크로서비스 환경에서 단일 진입점(Single Entry Point) 역할을 수행하는 Spring Cloud Gateway 기반의 서비스입니다.
+
+### 주요 기능 및 설계 원칙
+- ✅ **네임스페이스 명시 라우팅**: 외부 API에 서비스별 네임스페이스 제공
+- ✅ **버전리스 API 설계**: 백엔드 버전 정보를 내부에 숨김
+- ✅ **스마트 라우팅**: 클라이언트 요청을 적절한 백엔드 서비스로 전달
+- ✅ **JWT 인증**: 토큰 기반 사용자 인증 및 권한 관리
+- ✅ **보안 필터링**: 공개/보호 엔드포인트 구분 관리
+- ✅ **로드밸런싱**: 백엔드 서비스 간 트래픽 분산
+- ✅ **모니터링**: 요청/응답 로깅 및 디버깅 지원
+
+### **네임스페이스 명시 전략**
+
+**외부 API (클라이언트용)** → **내부 API (백엔드)**
+```
+/api/news/articles/**      → /api/articles/**        (뉴스 서비스)
+```
+
+**장점**:
+- 🎯 **압도적 명확성**: 서비스별 도메인 구분이 즉시 가능
+- 🚀 **무한 확장성**: 새로운 서비스 추가 시 네임스페이스 충돌 없음
+  ```
+  향후 확장 가능한 네임스페이스 예시:
+  /api/payment/**        # 결제 서비스
+  /api/analytics/**      # 분석 서비스  
+  /api/notification/**   # 알림 서비스
+  ```
+- 📚 **자체 문서화**: URL만 봐도 어떤 서비스인지 명확
+
+### **버전리스 API 전략**
+
+**외부 API (클라이언트용)** → **내부 API (백엔드)**
+```
+/api/auth/profile/**       → /api/v1/profile/**      (인증 서비스)
+/api/auth/**               → /api/v1/auth/**         (인증 서비스)
+```
+
+**장점**:
+- 🔧 **버전리스 설계**: 백엔드 버전 변경이 외부 API에 영향 없음
+
+### 기술 스택
+- **Spring Cloud Gateway** 2025.0.0
+- **Spring Boot** 3.5.4
+- **WebFlux** (비동기 리액티브 프로그래밍)
+- **JWT** (JSON Web Tokens)
+- **JWK** (JSON Web Key)
+
+---
+
+## 🏗️ 아키텍처
+
+```mermaid
+graph TD
+    subgraph SvcUser["서비스 유저"]
+	    Client[🌐 클라이언트<br/>Frontend/Mobile]
+    end
+
+    subgraph APIGateway["API 게이트웨이 서버<br>(토큰 검증 및 라우팅)"]
+        Gateway[API 통합 엔드포인트<br/>Port: 8000]
+		    subgraph JWTFilter["JWT 필터 클래스"]
+		        Filter[공개 키 활용 토큰 검사<br>및 유저 헤더로 변환]
+		    end
+		    subgraph APIRouter["API 라우터 클래스"]
+		        Router[요청별 MSA 서비스 라우팅]
+		    end		        
+		end
+		
+    subgraph AuthSvc["Auth Service<br>(인증 수행 및 토큰 발급)"]
+        Auth[인증 서비스<br/>Port: 8001]
+        AuthDB[(사용자 DB)]
+    end
+    
+    subgraph NewsSvc["News Service<br>(검증된 헤더 신뢰)"]
+        News[뉴스 서비스<br/>Port: 8080]
+        NewsDB[(뉴스 DB)]
+    end
+    
+    Client -->|로그인 요청<br>-OAuth, ID/PW 등-| Gateway
+    Client -->|뉴스 콘텐츠 요청<br>-JWT token 포함-| Gateway
+
+    Gateway -->|/news/premium<br>JWT 포함 요청| Filter 
+    --> Router -->|뉴스 요청<br>-인증된 헤더 전달-| News --> NewsDB
+
+    Gateway -->|/auth/google<br>인증정보 포함 요청| Router
+     -->|인증 요청<br>-인증 정보 전달-| Auth --> AuthDB
+
+    Filter <-->|공개키 요청 및 제공| Auth
+
+    style Client fill:#e1f5fe
+    style Gateway fill:#fff3e0
+    style Auth fill:#f3e5f5
+    style News fill:#e8f5e8
+    style AuthDB fill:#fff8e1
+    style NewsDB fill:#fff8e1
+```
+
+### 서비스 구성
+| 서비스 | 포트 | 역할 | 인증 여부 |
+|--------|------|------|----------|
+| **API Gateway** | 8000 | 요청 라우팅 및 인증 | - |
+| **인증 서비스** | 8001 | JWT 발급, 사용자 관리 | 부분적 |
+| **뉴스 서비스** | 8080 | 뉴스 콘텐츠 관리 | 부분적 |
+
+---
+
+## 🔐 JWT와 JWK 이해하기
+
+### JWT (JSON Web Token)란?
+
+JWT는 사용자 인증 정보를 JSON 형태로 안전하게 전송하기 위한 개방형 표준입니다.
+
+#### JWT 구조
+```
+eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWV9.signature
+│                                      │                                              │
+├─ Header (헤더)                        ├─ Payload (내용)                              └─ Signature (서명)
+```
+
+#### 1. **Header (헤더)**
+```json
+{
+  "alg": "RS256",    // 암호화 알고리즘
+  "typ": "JWT",      // 토큰 타입
+  "kid": "civic-insights-auth-key"  // 키 식별자
+}
+```
+
+#### 2. **Payload (페이로드)**
+```json
+{
+  "sub": "user123",           // 사용자 ID
+  "iss": "civic-insights",    // 발급자
+  "exp": 1640995200,          // 만료 시간
+  "iat": 1640908800           // 발급 시간
+}
+```
+
+#### 3. **Signature (서명)**
+서명은 헤더와 페이로드를 합쳐서 **개인키(Private Key)**로 암호화한 값입니다.
+
+### 공개키/개인키 암호화 이해하기
+
+#### 🔑 **개인키 (Private Key)**
+- **위치**: 인증 서비스 (Port 8001)에만 보관
+- **용도**: JWT 토큰에 **서명**할 때 사용
+- **특징**: 절대 외부에 노출되어서는 안 됨
+
+#### 🔓 **공개키 (Public Key)**
+- **위치**: API Gateway와 모든 서비스에서 접근 가능
+- **용도**: JWT 토큰의 **서명을 검증**할 때 사용
+- **특징**: 공개되어도 안전함
+
+### JWK (JSON Web Key)란?
+JWK는 공개키를 JSON 형태로 표현한 표준 형식입니다.
+
+#### JWK 예시
+```json
+{
+  "keys": [
+    {
+      "kty": "RSA",                           // 키 타입
+      "kid": "civic-insights-auth-key",       // 키 식별자
+      "use": "sig",                           // 키 사용 목적 (서명)
+      "alg": "RS256",                         // 알고리즘
+      "n": "0vx7agoebGcQSuuPiLJXZp...",      // RSA 공개키 modulus
+      "e": "AQAB"                             // RSA 공개키 exponent
+    }
+  ]
+}
+```
+
+#### JWK 접근 방법
+```bash
+# 공개키 조회
+curl http://localhost:8001/.well-known/jwks.json
+```
+
+---
+
+## 🚏 라우팅 스펙
+
+### 라우팅 우선순위 및 규칙
+
+API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
+
+| 순위 | 라우트 ID | 외부 API (네임스페이스 명시) | 내부 API (실제 라우팅) | JWT 검증 | 설명 |
+|------|-----------|---------------------------|-------------------------|----------|------|
+| 1 | `system-jwks` | `/.well-known/jwks.json` | `/.well-known/jwks.json` | ❌ | 공개키 조회 |
+| 2 | `news-premium` | `/api/news/articles/premium/**` | `/api/articles/premium/**` | ✅ | 프리미엄 뉴스 |
+| 3 | `news-management` | `/api/news/articles/**` (POST/PUT/DELETE) | `/api/articles/**` | ✅ | 뉴스 관리 |
+| 4 | `news-articles` | `/api/news/articles/**` | `/api/articles/**` | ❌ | 일반 뉴스 조회 |
+| 5 | `auth-profile` | `/api/auth/profile/**` | `/api/v1/profile/**` | ✅ | 프로필 관리 |
+| 6 | `auth-login` | `/api/auth/**` | `/api/v1/auth/**` | ❌ | 인증 서비스 |
+
+### 📝 상세 라우팅 명세
+
+> **🎯 네임스페이스 명시 설계**: 외부 API는 서비스별 네임스페이스를 명시하여 명확성을 제공하고, 내부적으로는 기존 백엔드 API 구조를 유지합니다.
+
+#### ========== 시스템 도메인 ==========
+
+#### 1. **JWK 공개키 엔드포인트**
+```yaml
+- id: system-jwks
+  uri: http://localhost:8001
+  predicates:
+    - Path=/.well-known/jwks.json
+  order: 1
+```
+- **외부 API**: `/.well-known/jwks.json`
+- **내부 API**: `/.well-known/jwks.json` (변경 없음)
+- **목적**: JWT 검증용 공개키 제공
+- **인증**: 불필요 (공개 엔드포인트)
+- **예시**: `GET http://localhost:8000/.well-known/jwks.json`
+
+#### ========== 뉴스 도메인 (네임스페이스: /api/news/*) ==========
+
+#### 2. **프리미엄 뉴스 엔드포인트**
+```yaml
+- id: news-premium
+  uri: http://localhost:8080
+  predicates:
+    - Path=/api/news/articles/premium/**
+  filters:
+    - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
+    - name: AuthorizationHeaderFilter
+  order: 2
+```
+- **외부 API**: `/api/news/articles/premium/**`
+- **내부 API**: `/api/articles/premium/**`
+- **목적**: 유료 구독자만 접근 가능한 프리미엄 콘텐츠
+- **인증**: 필수 (유료 구독 확인)
+- **예시**: `GET http://localhost:8000/api/news/articles/premium/123`
+
+#### 3. **뉴스 관리 엔드포인트**
+```yaml
+- id: news-management
+  uri: http://localhost:8080
+  predicates:
+    - Path=/api/news/articles/**
+    - Method=POST,PUT,DELETE
+  filters:
+    - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+    - name: AuthorizationHeaderFilter
+  order: 2
+```
+- **외부 API**: `/api/news/articles/**` (POST/PUT/DELETE)
+- **내부 API**: `/api/articles/**`
+- **목적**: 뉴스 콘텐츠 생성, 수정, 삭제
+- **인증**: 필수 (관리자 권한 필요)
+- **예시**:
+  - `POST http://localhost:8000/api/news/articles`
+  - `PUT http://localhost:8000/api/news/articles/123`
+  - `DELETE http://localhost:8000/api/news/articles/123`
+
+#### 4. **뉴스 조회 엔드포인트**
+```yaml
+- id: news-articles
+  uri: http://localhost:8080
+  predicates:
+    - Path=/api/news/articles/**
+  filters:
+    - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+  order: 4
+```
+- **외부 API**: `/api/news/articles/**`
+- **내부 API**: `/api/articles/**`
+- **목적**: 뉴스 조회 (전체, 무료, 카테고리별, 개별, 헬스체크)
+- **인증**: 불필요 (프리미엄 뉴스는 별도 라우트에서 처리)
+- **예시**:
+  - `GET http://localhost:8000/api/news/articles` → `/api/articles`
+  - `GET http://localhost:8000/api/news/articles/premium` → `/api/articles/premium`
+  - `GET http://localhost:8000/api/news/articles/free` → `/api/articles/free`
+  - `GET http://localhost:8000/api/news/articles/category/tech` → `/api/articles/category/tech`
+  - `GET http://localhost:8000/api/news/articles/123` → `/api/articles/123`
+  - `GET http://localhost:8000/api/news/articles/health` → `/api/articles/health`
+
+#### ========== 인증 도메인 (네임스페이스: /api/auth/*) ==========
+
+#### 5. **사용자 프로필 서비스**
+```yaml
+- id: auth-profile
+  uri: http://localhost:8001
+  predicates:
+    - Path=/api/auth/profile/**
+  filters:
+    - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
+    - name: AuthorizationHeaderFilter
+  order: 5
+```
+- **외부 API**: `/api/auth/profile/**`
+- **내부 API**: `/api/v1/profile/**`
+- **목적**: 인증된 사용자의 프로필 관리
+- **인증**: 필수 (JWT 토큰 필요)
+- **예시**: 
+  - `GET http://localhost:8000/api/auth/profile`
+  - `PUT http://localhost:8000/api/auth/profile`
+
+#### 6. **인증 서비스**
+```yaml
+- id: auth-login
+  uri: http://localhost:8001
+  predicates:
+    - Path=/api/auth/**
+  filters:
+    - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
+  order: 6
+```
+- **외부 API**: `/api/auth/**`
+- **내부 API**: `/api/v1/auth/**`
+- **목적**: 사용자 로그인, 회원가입, 토큰 발급
+- **인증**: 불필요 (인증 과정 자체)
+- **예시**:
+  - `GET http://localhost:8000/api/auth/google`
+  - `POST http://localhost:8000/api/auth/google/token`
+  - `POST http://localhost:8000/api/auth/refresh`
+
+---
+
+## 🔒 인증 메커니즘
+
+### JWT 검증 프로세스
+
+1. 클라이언트 → API Gateway: Authorization: Bearer <JWT>
+2. API Gateway: JWT 헤더에서 kid 추출
+3. API Gateway → 인증 서비스: JWK 공개키 요청 (캐시 미스시)
+4. 인증 서비스 → API Gateway: 공개키 반환
+5. API Gateway: 공개키로 JWT 서명 검증
+
+[JWT 검증 성공]
+6. API Gateway: 사용자 ID를 X-User-Id 헤더에 추가
+7. API Gateway → 백엔드 서비스: 요청 전달
+8. 백엔드 서비스 → API Gateway: 응답
+9. API Gateway → 클라이언트: 응답 전달
+
+[JWT 검증 실패]
+6. API Gateway → 클라이언트: 401 Unauthorized
+
+```mermaid
+sequenceDiagram
+    participant Client as 📱 클라이언트
+    participant Gateway as 🚪 API Gateway
+    participant Auth as 🔐 인증 서비스
+    participant Backend as 🏠 백엔드 서비스
+    
+    Client->>Gateway: 1. Authorization: Bearer <JWT>
+    Gateway->>Gateway: 2. JWT 헤더에서 kid 추출
+    
+    alt 공개키 캐시 미스
+        Gateway->>Auth: 3. JWK 공개키 요청
+        Auth->>Gateway: 4. 공개키 반환
+    end
+    
+    Gateway->>Gateway: 5. 공개키로 JWT 서명 검증
+    
+    alt JWT 검증 성공
+        Gateway->>Gateway: 6. 사용자 ID를 X-User-Id 헤더에 추가
+        Gateway->>Backend: 7. 요청 전달
+        Backend->>Gateway: 8. 응답
+        Gateway->>Client: 9. 응답 전달
+        Note over Gateway,Client: ✅ 성공 (유효 토큰)
+    else JWT 검증 실패
+        Gateway->>Client: 6. 401 Unauthorized
+        Note over Gateway,Client: ❌ 실패 (무효 토큰)
+    end
+```
+
+### 인증 헤더 형식
+
+#### 요청 헤더
+```http
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### 백엔드 서비스로 전달되는 헤더
+```http
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+X-User-Id: user123
+```
+
+### 캐싱 메커니즘
+
+```java
+// 공개키 캐싱 (성능 최적화)
+private final ConcurrentHashMap<String, PublicKey> keyCache = new ConcurrentHashMap<>();
+```
+
+- **목적**: JWKS 엔드포인트 호출 횟수 최소화
+- **전략**: kid(Key ID) 기반 캐싱
+- **갱신**: 키를 찾을 수 없을 때 자동 갱신
+
+---
+
+## ⚙️ 설정 가이드
+
+### application.yaml 설정
+
+```yaml
+# API Gateway Configuration
+server:
+  port: 8000
+
+spring:
+  application:
+    name: civic-insights-api-gw
+  cloud:
+    gateway:
+      routes:
+        # 라우팅 규칙들...
+
+# JWT 설정
+jwt:
+  auth-service:
+    jwks-uri: http://localhost:8001/.well-known/jwks.json
+
+# 로깅 설정
+logging:
+  level:
+    com.makersworld.civic_insights_api_gw: DEBUG
+    org.springframework.cloud.gateway: DEBUG
+    org.springframework.web.reactive: DEBUG
+```
+
+### 환경별 설정
+
+#### 개발 환경
+```yaml
+jwt:
+  auth-service:
+    jwks-uri: http://localhost:8001/.well-known/jwks.json
+```
+
+#### 운영 환경
+```yaml
+jwt:
+  auth-service:
+    jwks-uri: https://auth.civic-insights.com/.well-known/jwks.json
+```
+
+---
+
+## 👨‍💻 개발자 가이드
+
+### 프로젝트 실행
+
+#### 1. 의존성 설치 및 빌드
+```bash
+./gradlew clean build
+```
+
+#### 2. 애플리케이션 실행
+```bash
+./gradlew bootRun
+```
+
+#### 3. 헬스체크
+```bash
+curl http://localhost:8000/actuator/health
+```
+
+### 개발 환경 설정
+
+#### 필수 서비스 실행 순서
+1. **인증 서비스** (Port 8001)
+2. **뉴스 서비스** (Port 8080)
+3. **API Gateway** (Port 8000)
+
+#### 의존성
+```gradle
+dependencies {
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway'
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    implementation 'com.nimbusds:nimbus-jose-jwt:10.4'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+}
+```
+
+### 테스트 방법
+
+#### 1. 공개 엔드포인트 테스트 (인증 불필요)
+```bash
+# 토큰 획득 (인증 서비스)
+TOKEN=$(curl -s http://localhost:8000/api/auth/google/token \
+  -d '{"code":"authorization_code"}' \
+  -H "Content-Type: application/json" | jq -r '.accessToken')
+
+# 뉴스 목록 조회
+curl http://localhost:8000/api/news/articles
+
+# 무료 뉴스 조회  
+curl http://localhost:8000/api/news/articles/free
+
+# 무료 뉴스 상세 조회
+curl http://localhost:8000/api/news/articles/free/123
+
+# 프리미엄 뉴스 목록 조회  
+curl http://localhost:8000/api/news/articles/premium
+
+# 카테고리별 뉴스 조회
+curl http://localhost:8000/api/news/articles/category/basic-income
+curl http://localhost:8000/api/news/articles/category/civic-engagement
+curl http://localhost:8000/api/news/articles/category/megatrends
+
+# 뉴스 서비스 헬스체크
+curl http://localhost:8000/api/news/articles/health
+
+# JWK 공개키 조회 (시스템)
+curl http://localhost:8000/.well-known/jwks.json
+```
+
+#### 2. 인증 필요 엔드포인트 테스트
+```bash
+
+# 사용자 프로필 조회
+curl http://localhost:8000/api/auth/profile \
+  -H "Authorization: Bearer $TOKEN"
+
+# 프리미엄 뉴스 상세 조회
+curl http://localhost:8000/api/news/articles/premium/123
+
+# 뉴스 생성 (관리자 권한 필요)
+curl -X POST http://localhost:8000/api/news/articles \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"New Article","content":"Article content","category":"tech"}'
+
+# 뉴스 수정 (관리자 권한 필요)  
+curl -X PUT http://localhost:8000/api/news/articles/123 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Updated Article","content":"Updated content"}'
+```
+
+#### 3. API 매핑 확인
+```bash
+# 외부 API → 내부 API 매핑 확인을 위한 로그 모니터링
+tail -f logs/gateway.log | grep "Route matched"
+
+# 또는 디버그 모드에서 확인
+export LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=DEBUG
+./gradlew bootRun
+```
+
+### 커스텀 필터 개발
+
+새로운 필터를 추가하려면:
+
+```java
+@Component
+public class CustomFilter extends AbstractGatewayFilterFactory<CustomFilter.Config> {
+    
+    @Override
+    public GatewayFilter apply(Config config) {
+        return (exchange, chain) -> {
+            // 필터 로직 구현
+            return chain.filter(exchange);
+        };
+    }
+    
+    public static class Config {
+        // 설정 프로퍼티
+    }
+}
+```
+
+---
+
+## 🔧 트러블슈팅
+
+### 자주 발생하는 문제들
+
+#### 1. **401 Unauthorized 에러**
+
+**증상**: JWT 토큰이 있는데도 인증 실패
+```
+{"timestamp":"2024-01-01T12:00:00.000Z","status":401,"error":"Unauthorized"}
+```
+
+**원인**: 
+- JWT 토큰 만료
+- 잘못된 서명
+- JWKS 공개키 불일치
+
+**해결방법**:
+```bash
+# 1. 토큰 유효성 확인
+jwt decode $TOKEN
+
+# 2. JWKS 엔드포인트 확인
+curl http://localhost:8001/.well-known/jwks.json
+
+# 3. 새 토큰 발급
+curl -X POST http://localhost:8000/api/auth/refresh?refreshToken=$REFRESH_TOKEN
+```
+
+#### 2. **라우팅 실패 (404 Not Found)**
+
+**증상**: API 호출이 라우팅되지 않음
+```
+{"timestamp":"2024-01-01T12:00:00.000Z","status":404,"error":"Not Found"}
+```
+
+**원인**:
+- 잘못된 URL 패턴
+- 라우트 순서 문제
+- 백엔드 서비스 미실행
+
+**해결방법**:
+```bash
+# 1. 라우팅 설정 확인
+curl http://localhost:8000/actuator/gateway/routes
+
+# 2. 백엔드 서비스 상태 확인
+curl http://localhost:8001/actuator/health
+curl http://localhost:8080/actuator/health
+
+# 3. Gateway 로그 확인
+tail -f logs/spring.log | grep "gateway"
+```
+
+#### 3. **JWKS 연결 실패**
+
+**증상**: 공개키를 가져올 수 없음
+```
+Failed to fetch JWKS from http://localhost:8001/.well-known/jwks.json
+```
+
+**해결방법**:
+```bash
+# 1. 인증 서비스 상태 확인
+curl http://localhost:8001/.well-known/jwks.json
+
+# 2. 네트워크 연결 확인
+telnet localhost 8001
+
+# 3. DNS 해석 확인
+nslookup localhost
+```
+
+### 디버깅 팁
+
+#### 로그 레벨 설정
+```yaml
+logging:
+  level:
+    com.makersworld.civic_insights_api_gw: DEBUG
+    org.springframework.cloud.gateway.filter: TRACE
+```
+
+#### Gateway 정보 확인
+```bash
+# 현재 라우트 목록
+curl http://localhost:8000/actuator/gateway/routes
+
+# 필터 목록
+curl http://localhost:8000/actuator/gateway/globalfilters
+```
+
+---
+
+## 📊 모니터링
+
+### 메트릭 확인
+
+```bash
+# Gateway 메트릭
+curl http://localhost:8000/actuator/metrics
+
+# 특정 라우트 메트릭
+curl http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests
+```
+
+### 로그 분석
+
+```bash
+# 실시간 로그 모니터링
+tail -f logs/spring.log | grep -E "(JWT|Gateway|Filter)"
+
+# 에러 로그만 필터링
+tail -f logs/spring.log | grep ERROR
+```
+
+---
+
+## 📚 참고 자료
+
+### 공식 문서
+- [Spring Cloud Gateway](https://spring.io/projects/spring-cloud-gateway)
+- [JWT.io](https://jwt.io/) - JWT 디버깅 도구
+- [RFC 7517 - JSON Web Key](https://tools.ietf.org/html/rfc7517)
+
+### 관련 프로젝트
+- [civic-insights-auth](../civic-insights-auth/README.md) - 인증 서비스
+- [civic-sights-main](../civic-sights-main/README.md) - 뉴스 서비스
+
+---
+
+## 🤝 기여하기
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+---
+
+## 📝 라이센스
+
+이 프로젝트는 MIT 라이센스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
+
+---
+
+**🔗 문의사항**: [이슈 생성](https://github.com/your-org/civic-insights/issues)

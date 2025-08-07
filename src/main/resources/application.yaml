@@ -1,0 +1,82 @@
+# API Gateway Configuration - API_ENDPOINTS.md 기준으로 수정
+server:
+  port: 8000
+
+spring:
+  application:
+    name: civic-insights-api-gw
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            # ========== 시스템 도메인 (버전리스) ==========
+            # 1. JWK 공개키 엔드포인트 (JWT 검증 불필요, 최우선 순위)
+            - id: system-jwks
+              uri: http://localhost:8001
+              predicates:
+                - Path=/.well-known/jwks.json
+              order: 1
+
+            # ========== 뉴스 도메인 (네임스페이스 명시: /api/news/*) ==========
+            # 2. 뉴스 서비스 - 프리미엄 콘텐츠 (JWT 검증 필요)
+            - id: news-premium
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/premium/**
+              filters:
+                - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
+                - name: AuthorizationHeaderFilter
+              order: 2
+            
+            # 3. 뉴스 서비스 - 관리 작업 (JWT 검증 필요)
+            - id: news-management
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/**
+                - Method=POST,PUT,DELETE
+              filters:
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+                - name: AuthorizationHeaderFilter
+              order: 3
+            
+            # 4. 뉴스 서비스 - 일반 조회 (JWT 검증 불필요)
+            - id: news-articles
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/**
+              filters:
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+              order: 4
+
+            # ========== 인증 도메인 (네임스페이스 명시 및 버전 제거: /api/auth/*) ==========
+            # 5. 인증 서비스 - 사용자 프로필 (JWT 검증 필요)
+            - id: auth-profile
+              uri: http://localhost:8001
+              predicates:
+                - Path=/api/auth/profile/**
+              filters:
+                - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
+                - name: AuthorizationHeaderFilter
+              order: 5
+            
+            # 6. 인증 서비스 - 로그인/회원가입 (JWT 검증 불필요)
+            - id: auth-login
+              uri: http://localhost:8001
+              predicates:
+                - Path=/api/auth/**
+              filters:
+                - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
+              order: 6
+
+# JWT 설정
+jwt:
+  authService:
+    jwksUri: http://localhost:8001/.well-known/jwks.json
+
+# 로깅 설정
+logging:
+  level:
+    "[com.makersworld.civic_insights_api_gw]": DEBUG
+    "[org.springframework.cloud.gateway]": DEBUG
+    "[org.springframework.web.reactive]": DEBUG

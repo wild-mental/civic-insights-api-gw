@@ -1,0 +1,10 @@
+{
+  "properties": [
+    {
+      "name": "jwt.authService.jwksUri",
+      "type": "java.lang.String",
+      "description": "JWT 인증 서비스의 JWK(JSON Web Key) 공개키 조회 URI. JWT 토큰 검증을 위한 공개키를 가져오는 엔드포인트입니다.",
+      "defaultValue": "http://localhost:8001/.well-known/jwks.json"
+    }
+  ]
+}
