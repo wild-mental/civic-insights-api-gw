@@ -16,6 +16,8 @@ spring:
               uri: http://localhost:8001
               predicates:
                 - Path=/.well-known/jwks.json
+              filters:
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 1
 
             # ========== 뉴스 도메인 (네임스페이스 명시: /api/news/*) ==========
@@ -26,6 +28,7 @@ spring:
                 - Path=/api/news/articles/premium
               filters:
                 - RewritePath=/api/news/articles/premium, /api/articles/premium
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 2
 
             # 3. 뉴스 서비스 - 프리미엄 콘텐츠 상세 조회 (JWT 검증 필요)
@@ -36,6 +39,7 @@ spring:
               filters:
                 - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
                 - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 3
             
             # 4. 뉴스 서비스 - 관리 작업 (JWT 검증 필요)
@@ -47,6 +51,7 @@ spring:
               filters:
                 - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
                 - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 4
             
             # 5. 뉴스 서비스 - 일반 조회 (JWT 검증 불필요)
@@ -56,6 +61,7 @@ spring:
                 - Path=/api/news/articles/**
               filters:
                 - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 5
 
             # ========== 인증 도메인 (네임스페이스 명시 및 버전 제거: /api/auth/*) ==========
@@ -67,6 +73,7 @@ spring:
               filters:
                 - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
                 - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 6
             
             # 7. 인증 서비스 - 로그인/회원가입 (JWT 검증 불필요)
@@ -76,6 +83,7 @@ spring:
                 - Path=/api/auth/**
               filters:
                 - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 7
 
 # JWT 설정
