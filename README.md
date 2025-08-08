@@ -202,14 +202,15 @@ curl http://localhost:8001/.well-known/jwks.json
 
 API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
 
-| 순위 | 라우트 ID | 외부 API (네임스페이스 명시) | 내부 API (실제 라우팅) | JWT 검증 | 설명 |
-|------|-----------|---------------------------|-------------------------|----------|------|
-| 1 | `system-jwks` | `/.well-known/jwks.json` | `/.well-known/jwks.json` | ❌ | 공개키 조회 |
-| 2 | `news-premium` | `/api/news/articles/premium/**` | `/api/articles/premium/**` | ✅ | 프리미엄 뉴스 |
-| 3 | `news-management` | `/api/news/articles/**` (POST/PUT/DELETE) | `/api/articles/**` | ✅ | 뉴스 관리 |
-| 4 | `news-articles` | `/api/news/articles/**` | `/api/articles/**` | ❌ | 일반 뉴스 조회 |
-| 5 | `auth-profile` | `/api/auth/profile/**` | `/api/v1/profile/**` | ✅ | 프로필 관리 |
-| 6 | `auth-login` | `/api/auth/**` | `/api/v1/auth/**` | ❌ | 인증 서비스 |
+| 순위 | 라우트 ID | 외부 API (네임스페이스 명시) | 내부 API (실제 라우팅) | JWT 검증 | 보안 헤더 | 설명 |
+|------|-----------|---------------------------|-------------------------|----------|----------|------|
+| 1 | `system-jwks` | `/.well-known/jwks.json` | `/.well-known/jwks.json` | ❌ | ✅ | 공개키 조회 |
+| 2 | `news-premium-list` | `/api/news/articles/premium` | `/api/articles/premium` | ❌ | ✅ | 프리미엄 뉴스 목록 |
+| 3 | `news-premium-detail` | `/api/news/articles/premium/**` | `/api/articles/premium/**` | ✅ | ✅ | 프리미엄 뉴스 상세 |
+| 4 | `news-management` | `/api/news/articles/**` (POST/PUT/DELETE) | `/api/articles/**` | ✅ | ✅ | 뉴스 관리 |
+| 5 | `news-articles` | `/api/news/articles/**` | `/api/articles/**` | ❌ | ✅ | 일반 뉴스 조회 |
+| 6 | `auth-profile` | `/api/auth/profile/**` | `/api/v1/profile/**` | ✅ | ✅ | 프로필 관리 |
+| 7 | `auth-login` | `/api/auth/**` | `/api/v1/auth/**` | ❌ | ✅ | 인증 서비스 |
 
 ### 📝 상세 라우팅 명세
 
@@ -233,24 +234,42 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
 
 #### ========== 뉴스 도메인 (네임스페이스: /api/news/*) ==========
 
-#### 2. **프리미엄 뉴스 엔드포인트**
+#### 2. **프리미엄 뉴스 목록 엔드포인트**
 ```yaml
-- id: news-premium
+- id: news-premium-list
+  uri: http://localhost:8080
+  predicates:
+    - Path=/api/news/articles/premium
+  filters:
+    - RewritePath=/api/news/articles/premium, /api/articles/premium
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 2
+```
+- **외부 API**: `/api/news/articles/premium`
+- **내부 API**: `/api/articles/premium`
+- **목적**: 프리미엄 뉴스 목록 조회 (제목만)
+- **인증**: 불필요 (목록은 누구나 볼 수 있음)
+- **예시**: `GET http://localhost:8000/api/news/articles/premium`
+
+#### 3. **프리미엄 뉴스 상세 엔드포인트**
+```yaml
+- id: news-premium-detail
   uri: http://localhost:8080
   predicates:
     - Path=/api/news/articles/premium/**
   filters:
     - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
     - name: AuthorizationHeaderFilter
-  order: 2
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 3
 ```
 - **외부 API**: `/api/news/articles/premium/**`
 - **내부 API**: `/api/articles/premium/**`
-- **목적**: 유료 구독자만 접근 가능한 프리미엄 콘텐츠
+- **목적**: 유료 구독자만 접근 가능한 프리미엄 콘텐츠 상세
 - **인증**: 필수 (유료 구독 확인)
 - **예시**: `GET http://localhost:8000/api/news/articles/premium/123`
 
-#### 3. **뉴스 관리 엔드포인트**
+#### 4. **뉴스 관리 엔드포인트**
 ```yaml
 - id: news-management
   uri: http://localhost:8080
@@ -260,7 +279,8 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
   filters:
     - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
     - name: AuthorizationHeaderFilter
-  order: 2
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 4
 ```
 - **외부 API**: `/api/news/articles/**` (POST/PUT/DELETE)
 - **내부 API**: `/api/articles/**`
@@ -271,7 +291,7 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
   - `PUT http://localhost:8000/api/news/articles/123`
   - `DELETE http://localhost:8000/api/news/articles/123`
 
-#### 4. **뉴스 조회 엔드포인트**
+#### 5. **뉴스 조회 엔드포인트**
 ```yaml
 - id: news-articles
   uri: http://localhost:8080
@@ -279,7 +299,8 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
     - Path=/api/news/articles/**
   filters:
     - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
-  order: 4
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 5
 ```
 - **외부 API**: `/api/news/articles/**`
 - **내부 API**: `/api/articles/**`
@@ -295,7 +316,7 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
 
 #### ========== 인증 도메인 (네임스페이스: /api/auth/*) ==========
 
-#### 5. **사용자 프로필 서비스**
+#### 6. **사용자 프로필 서비스**
 ```yaml
 - id: auth-profile
   uri: http://localhost:8001
@@ -304,7 +325,8 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
   filters:
     - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
     - name: AuthorizationHeaderFilter
-  order: 5
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 6
 ```
 - **외부 API**: `/api/auth/profile/**`
 - **내부 API**: `/api/v1/profile/**`
@@ -314,7 +336,7 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
   - `GET http://localhost:8000/api/auth/profile`
   - `PUT http://localhost:8000/api/auth/profile`
 
-#### 6. **인증 서비스**
+#### 7. **인증 서비스**
 ```yaml
 - id: auth-login
   uri: http://localhost:8001
@@ -322,7 +344,8 @@ API Gateway는 **우선순위(order)** 기반으로 요청을 매칭합니다.
     - Path=/api/auth/**
   filters:
     - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
-  order: 6
+    - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+  order: 7
 ```
 - **외부 API**: `/api/auth/**`
 - **내부 API**: `/api/v1/auth/**`
@@ -414,7 +437,7 @@ private final ConcurrentHashMap<String, PublicKey> keyCache = new ConcurrentHash
 ### application.yaml 설정
 
 ```yaml
-# API Gateway Configuration
+# API Gateway Configuration - 최신 Spring Cloud Gateway 2025.0.0 호환
 server:
   port: 8000
 
@@ -423,36 +446,101 @@ spring:
     name: civic-insights-api-gw
   cloud:
     gateway:
-      routes:
-        # 라우팅 규칙들...
+      server:
+        webflux:  # 새로운 Spring Cloud Gateway 설정 구조
+          routes:
+            # ========== 시스템 도메인 ==========
+            - id: system-jwks
+              uri: http://localhost:8001
+              predicates:
+                - Path=/.well-known/jwks.json
+              filters:
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 1
 
-# JWT 설정
+            # ========== 뉴스 도메인 ==========
+            - id: news-premium-detail
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/premium/**
+              filters:
+                - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
+                - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 3
+            
+            - id: news-management
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/**
+                - Method=POST,PUT,DELETE
+              filters:
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+                - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 4
+            
+            - id: news-articles
+              uri: http://localhost:8080
+              predicates:
+                - Path=/api/news/articles/**
+              filters:
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 5
+
+            # ========== 인증 도메인 ==========
+            - id: auth-profile
+              uri: http://localhost:8001
+              predicates:
+                - Path=/api/auth/profile/**
+              filters:
+                - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
+                - name: AuthorizationHeaderFilter
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 6
+            
+            - id: auth-login
+              uri: http://localhost:8001
+              predicates:
+                - Path=/api/auth/**
+              filters:
+                - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
+                - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
+              order: 7
+
+# JWT 설정 (JwtConfigProperties와 연동)
 jwt:
-  auth-service:
-    jwks-uri: http://localhost:8001/.well-known/jwks.json
+  authService:  # 카멜케이스 변경 (기존: auth-service)
+    jwksUri: http://localhost:8001/.well-known/jwks.json  # 카멜케이스 변경 (기존: jwks-uri)
 
 # 로깅 설정
 logging:
   level:
-    com.makersworld.civic_insights_api_gw: DEBUG
-    org.springframework.cloud.gateway: DEBUG
-    org.springframework.web.reactive: DEBUG
+    "[com.makersworld.civic_insights_api_gw]": DEBUG
+    "[org.springframework.cloud.gateway]": DEBUG
+    "[org.springframework.web.reactive]": DEBUG
 ```
+
+> **🚨 중요 변경사항**:
+> - **Spring Cloud Gateway 2025.0.0**: `spring.cloud.gateway.routes` → `spring.cloud.gateway.server.webflux.routes`
+> - **JWT 설정 구조**: `jwt.auth-service.jwks-uri` → `jwt.authService.jwksUri` (JwtConfigProperties 연동)
+> - **보안 헤더**: 모든 라우트에 `X-Gateway-Internal` 헤더 자동 추가
 
 ### 환경별 설정
 
 #### 개발 환경
 ```yaml
 jwt:
-  auth-service:
-    jwks-uri: http://localhost:8001/.well-known/jwks.json
+  authService:
+    jwksUri: http://localhost:8001/.well-known/jwks.json
 ```
 
 #### 운영 환경
 ```yaml
 jwt:
-  auth-service:
-    jwks-uri: https://auth.civic-insights.com/.well-known/jwks.json
+  authService:
+    jwksUri: https://auth.civic-insights.com/.well-known/jwks.json
 ```
 
 ---
@@ -587,7 +675,31 @@ public class CustomFilter extends AbstractGatewayFilterFactory<CustomFilter.Conf
 
 ### 자주 발생하는 문제들
 
-#### 1. **401 Unauthorized 에러**
+#### 1. **Null Pointer Exception (JWT 헤더)**
+
+**증상**: Authorization 헤더가 있는데도 NullPointerException 발생
+```
+Potential null pointer access: The method get(Object) may return null
+```
+
+**원인**: 
+- `request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0)` 에서 빈 리스트 반환 시 null 접근
+
+**해결방법**:
+```java
+// 기존 (문제 있는 코드)
+String authorizationHeader = request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0);
+
+// 수정된 코드 (안전한 접근)
+String authorizationHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+if (authorizationHeader == null) {
+    return onError(exchange, "Invalid authorization header", HttpStatus.UNAUTHORIZED);
+}
+```
+
+> **💡 팁**: `getFirst()` 메서드는 Spring의 HttpHeaders에서 제공하는 안전한 헤더 접근 방법입니다.
+
+#### 2. **401 Unauthorized 에러**
 
 **증상**: JWT 토큰이 있는데도 인증 실패
 ```
@@ -636,7 +748,56 @@ curl http://localhost:8080/actuator/health
 tail -f logs/spring.log | grep "gateway"
 ```
 
-#### 3. **JWKS 연결 실패**
+#### 3. **Spring Cloud Gateway 설정 키 경고**
+
+**증상**: 애플리케이션 시작 시 설정 키 변경 경고 발생
+```
+The use of configuration keys that have been renamed was found in the environment:
+Key: spring.cloud.gateway.routes[0].id
+Replacement: spring.cloud.gateway.server.webflux.routes[0].id
+```
+
+**원인**: 
+- Spring Cloud Gateway 2025.0.0에서 설정 키 구조 변경
+
+**해결방법**:
+```yaml
+# 기존 설정 (deprecated)
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: example
+
+# 새로운 설정 (권장)
+spring:
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: example
+```
+
+#### 4. **JWT 설정 프로퍼티 불일치**
+
+**증상**: JWT 설정을 찾을 수 없다는 오류
+```
+Could not bind properties to 'JwtConfigProperties'
+```
+
+**원인**: 
+- application.yaml의 JWT 설정과 JwtConfigProperties 클래스 구조 불일치
+
+**해결방법**:
+```yaml
+# 올바른 설정 (JwtConfigProperties와 일치)
+jwt:
+  authService:         # 카멜케이스
+    jwksUri: http://... # 카멜케이스
+```
+
+#### 5. **JWKS 연결 실패**
 
 **증상**: 공개키를 가져올 수 없음
 ```
@@ -713,20 +874,6 @@ tail -f logs/spring.log | grep ERROR
 
 ---
 
-## 🤝 기여하기
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
-
 ## 📝 라이센스
 
 이 프로젝트는 MIT 라이센스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
-
----
-
-**🔗 문의사항**: [이슈 생성](https://github.com/your-org/civic-insights/issues)
