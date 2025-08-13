@@ -23,13 +23,76 @@ cd civic-insights-api-gw && ./gradlew bootRun
 
 ---
 
-## 2. 게이트웨이 라우팅 한눈에 보기(요약)
-- 뉴스 네임스페이스: 외부 `/api/news/**` → 내부 뉴스 `/api/articles/**`
-- 인증 네임스페이스: 외부 `/api/auth/**` → 내부 인증 `/api/v1/auth/**`
-- 보호 정책:
-  - 게이트웨이는 JWT 검증 시 `X-User-Id`, `X-User-Roles`, `X-Token-Issuer`를 백엔드에 전달
-  - 백엔드는 `X-Gateway-Internal` 헤더 없으면 403 (GatewayOnlyFilter)
-  - 뉴스 프리미엄 상세는 컨트롤러에서 `X-User-Roles`에 `PAID_USER` 필요
+## 2. 게이트웨이 라우팅 확인 및 매핑 관계
+
+### 2.1 라우팅 상태 확인
+자동화된 스크립트로 라우팅 정보를 한번에 확인할 수 있습니다:
+```bash
+# 전체 라우팅 정보 조회 스크립트 실행
+./scripts/gateway-routes-info.sh
+```
+
+또는 수동으로 확인:
+```bash
+# Gateway 상태 확인
+curl http://localhost:8000/actuator/health | jq .
+
+# 등록된 라우트 개수 확인
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.routes.count" | jq .
+
+# 라우트 ID 목록 확인
+curl -s "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | \
+  jq -r '.availableTags[] | select(.tag == "routeId") | .values[]'
+```
+
+### 2.2 라우팅 매핑 관계 (외부 API → 내부 서비스)
+- **네임스페이스 명시 전략**: 외부 API는 서비스별 네임스페이스를 제공
+- **버전리스 전략**: 백엔드 버전 정보를 내부에 숨김
+
+| 외부 API | 내부 서비스 | 인증 | 설명 |
+|------------|------------|------|------|
+| `/.well-known/jwks.json` | `8001/.well-known/jwks.json` | ❌ | JWKS 공개키 |
+| `/api/news/articles/premium` | `8080/api/articles/premium` | ❌ | 프리미엄 목록 |
+| `/api/news/articles/premium/**` | `8080/api/articles/premium/**` | ✅ | 프리미엄 상세 |
+| `/api/news/articles/**` | `8080/api/articles/**` | ❌ | 일반 뉴스 |
+| `/api/auth/profile/**` | `8001/api/v1/profile/**` | ✅ | 사용자 프로필 |
+| `/api/auth/**` | `8001/api/v1/auth/**` | ❌ | 인증 서비스 |
+
+### 2.3 보호 정책
+- **JWT 검증**: `AuthorizationHeaderFilter`가 수행
+- **사용자 헤더 전달**: `X-User-Id`, `X-User-Roles`, `X-Token-Issuer`
+- **보안 헤더**: `X-Gateway-Internal` (백엔드 직접 접근 차단)
+- **권한 검사**: 뉴스 프리미엄 상세는 `PAID_USER` 역할 필요
+
+---
+
+## 2.4 라우팅 정보 스크립트 출력 예시
+`./scripts/gateway-routes-info.sh` 실행 시 다음과 같은 정보를 확인할 수 있습니다:
+
+```
+=== Civic Insights API Gateway 라우팅 정보 ===
+
+1. Gateway 상태: UP
+2. 등록된 라우트 개수: 총 7개의 라우트가 등록되어 있습니다.
+3. 라우트 ID와 대상 서비스:
+  - Route ID: system-jwks, news-premium-list, news-premium-detail, 
+             news-management, news-articles, auth-profile, auth-login
+4. 대상 서비스 URI:
+  - Target: http://localhost:8080 (뉴스 서비스)
+  - Target: http://localhost:8001 (인증 서비스)
+5. 실제 라우팅 매핑 테스트:
+  시스템-JWKS: /.well-known/jwks.json → ✓ 라우팅 성공 (200)
+  뉴스-프리미엄목록: /api/news/articles/premium → ✓ 라우팅 성공 (200)
+  뉴스-프리미엄상세: /api/news/articles/premium/1 → ✓ 라우팅 성공, 인증 필요 (401)
+  인증-로그인: /api/auth/google → ✓ 라우팅 성공 (302)
+  인증-프로필: /api/auth/profile → ✓ 라우팅 성공, 인증 필요 (401)
+```
+
+> **💡 상태 코드 해석**:
+> - `200/302`: 라우팅 성공, 백엔드 서비스 정상
+> - `401`: 라우팅 성공, 인증 필요 (AuthorizationHeaderFilter 정상 동작)
+> - `404`: 라우팅 규칙 문제 또는 경로 오류
+> - `502`: 라우팅 성공, 백엔드 서비스 미실행
 
 ---
 
@@ -64,16 +127,26 @@ curl -s -X POST http://localhost:8001/api/v1/auth/google/token \
 
 ### 4.1 공개 엔드포인트(목록)
 ```bash
-# 프리미엄 뉴스 목록 (인증 불필요)
+# 1. 프리미엄 뉴스 목록 (인증 불필요)
 curl -i http://localhost:8000/api/news/articles/premium
+# 기대: 200 OK 또는 502 Bad Gateway (백엔드 서비스 없음)
 
-# 일반 뉴스 목록
+# 2. 일반 뉴스 목록
 curl -i http://localhost:8000/api/news/articles
+# 기대: 200 OK 또는 404 Not Found (라우팅 문제)
 
-# 무료 뉴스 목록
+# 3. 무료 뉴스 목록
 curl -i http://localhost:8000/api/news/articles/free
+# 기대: 200 OK 또는 502 Bad Gateway
+
+# 4. 네임스페이스 매핑 확인
+echo "외부 API: /api/news/articles/premium → 내부: /api/articles/premium"
 ```
-- 모두 200 OK 뉴스 목록 응답 기대
+
+**응답 코드 분석**:
+- `200 OK`: 라우팅 성공 + 백엔드 서비스 정상
+- `404 Not Found`: 라우팅 규칙 오류 또는 경로 불일치
+- `502 Bad Gateway`: 라우팅 성공, 백엔드 서비스 없음 (정상)
 
 ### 4.2 보호 엔드포인트(프리미엄 상세) – 실패 케이스
 ```bash
@@ -128,29 +201,100 @@ curl -i http://localhost:8080/api/articles \
 ---
 
 ## 6. 문제해결(FAQ)
-- Q: 보호 엔드포인트가 401을 반환합니다
-  - A: `Authorization: Bearer` 헤더 확인, 토큰 만료/서명/발급자 확인. 게이트웨이 로그에서 JWT 검증 실패 원인 확인.
-- Q: 403 Forbidden이 나옵니다(백엔드 직접 호출 시)
-  - A: GatewayOnlyFilter 동작 정상. 게이트웨이 경유로 호출하세요.
-- Q: `PAID_USER`인데 403이 납니다
-  - A: 토큰의 역할 클레임이 게이트웨이 `X-User-Roles`로 제대로 전달되는지 확인. 역할 문자열이 `PAID_USER` 혹은 `ROLE_PAID_USER`인지 확인.
-- Q: 게이트웨이에서 JWT 파싱 오류가 발생합니다
-  - A: 인증 서비스(8001)의 `/.well-known/jwks.json` 엔드포인트가 정상 동작하는지 확인. `curl http://localhost:8001/.well-known/jwks.json`
+
+### 6.1 라우팅 관련 문제
+- **Q: 404 Not Found 에러가 발생합니다**
+  - A: 라우팅 규칙 확인. `./scripts/gateway-routes-info.sh` 실행하여 라우팅 상태 확인
+  - 또는 수동 확인: `curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.routes.count"`
+
+- **Q: 502 Bad Gateway 에러가 나옵니다**
+  - A: 라우팅은 성공, 백엔드 서비스 미실행. 대상 서뺄 기동 확인:
+    - 인증 서비스: `curl http://localhost:8001/actuator/health`
+    - 뉴스 서비스: `curl http://localhost:8080/actuator/health`
+
+### 6.2 인증 관련 문제
+- **Q: 401 Unauthorized 에러가 발생합니다**
+  - A1: `Authorization: Bearer <token>` 헤더 형식 확인
+  - A2: JWT 토큰 만료/서명/발급자 확인
+  - A3: 게이트웨이 로그에서 JWT 검증 실패 원인 확인
+  - A4: JWKS 엔드포인트 동작 확인: `curl http://localhost:8000/.well-known/jwks.json`
+
+- **Q: `PAID_USER` 권한인데 403 에러가 나옵니다**
+  - A: JWT 토큰의 `roles` 클레임이 `X-User-Roles` 헤더로 제대로 전달되는지 확인
+  - 역할 문자열이 `PAID_USER` 또는 `ROLE_PAID_USER`인지 확인
+
+### 6.3 보안 관련 문제
+- **Q: 백엔드 직접 호출 시 403 Forbidden**
+  - A: GatewayOnlyFilter 정상 동작. 반드시 게이트웨이 경유로 호출
+  - 개발 테스트용: `X-Gateway-Internal` 헤더 추가
+
+### 6.4 디버깅 도구
+```bash
+# 전체 라우팅 상태 확인
+./scripts/gateway-routes-info.sh
+
+# Gateway 메트릭 확인
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | jq .
+
+# 실시간 로그 모니터링
+tail -f logs/spring.log | grep -E "(JWT|Gateway|Filter)"
+```
 
 ---
 
-## 7. 보안 메모(요약)
-- 현재 데모: Auth 콜백은 브라우저 자동 제출 폼으로 토큰을 프런트 `/api/session`에 POST(초보자 검증 용이). 운영은 BFF 완전형(세션 코드) 권장.
-- 게이트웨이: JWT 검증(`AuthorizationHeaderFilter`) + `X-Gateway-Internal` 부여, 백엔드 직접 접근 차단.
-- 뉴스: Spring Security는 permitAll, 컨트롤러에서 `X-User-Roles`로 `PAID_USER` 권한 검사.
+## 7. 실습 완료 후 다음 단계
+
+### 7.1 보안 강화 (선택사항)
+- **mTLS 적용**: 서비스 간 상호 인증
+- **Rate Limiting**: API 호출량 제한
+- **Circuit Breaker**: 장애 전파 방지
+
+### 7.2 모니터링 및 로깅
+```bash
+# Gateway 메트릭 모니터링
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | jq .
+
+# 실시간 요청 통계
+watch -n 2 "curl -s 'http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests' | jq -r '.measurements[] | select(.statistic == \"COUNT\") | \"Total Requests: \" + (.value | tostring)'"
+```
+
+### 7.3 보안 메모
+- **현재 구현**: 개발/테스트용 간단한 JWT 검증
+- **운영 권장사항**: 
+  - BFF 패턴으로 세션 기반 인증
+  - `X-Gateway-Internal` 헤더를 환경변수로 관리
+  - Actuator 엔드포인트 접근 제한
+  - HTTPS 강제 적용
 
 ---
 
 ## 8. 체크리스트
-- [ ] 게이트웨이 8000, 인증 8001, 뉴스 8080 기동
-- [ ] 게이트웨이 라우팅 확인: `curl http://localhost:8000/actuator/gateway/routes`
-- [ ] 공개 엔드포인트(목록) 200: `/api/news/articles`, `/api/news/articles/premium`
-- [ ] 보호 엔드포인트(미인증) 401: `/api/news/articles/premium/1`
-- [ ] 보호 엔드포인트(인증 + PAID_USER) 200: 유효한 JWT로 접근
-- [ ] 백엔드 직접 호출 403: `http://localhost:8080/api/articles`
-- [ ] JWT 검증 시 사용자 헤더 전달: `X-User-Id`, `X-User-Roles`, `X-Token-Issuer`
+
+### 8.1 기본 설정 및 서비스 상태
+- [ ] **서비스 기동**: 게이트웨이 8000, 인증 8001, 뉴스 8080
+- [ ] **Gateway 상태 확인**: `curl http://localhost:8000/actuator/health`
+- [ ] **라우팅 정보 확인**: `./scripts/gateway-routes-info.sh` 실행
+- [ ] **등록된 라우트 개수**: 7개 라우트 확인
+
+### 8.2 공개 엔드포인트 테스트 (인증 불필요)
+- [ ] **JWKS 엔드포인트**: `/.well-known/jwks.json` → 200 OK
+- [ ] **프리미엄 목록**: `/api/news/articles/premium` → 200 OK
+- [ ] **일반 뉴스 목록**: `/api/news/articles` → 200 OK (or 404 if backend down)
+- [ ] **인증 서비스**: `/api/auth/google` → 302 Redirect
+
+### 8.3 보호 엔드포인트 테스트 (인증 필요)
+- [ ] **미인증 접근**: `/api/news/articles/premium/1` → 401 Unauthorized
+- [ ] **인증된 접근**: JWT 토큰으로 `/api/news/articles/premium/1` → 200 OK
+- [ ] **프로필 접근**: JWT 토큰으로 `/api/auth/profile` → 200 OK
+
+### 8.4 보안 검증
+- [ ] **백엔드 직접 접근 차단**: `http://localhost:8080/api/articles` → 403 Forbidden
+- [ ] **보안 헤더 전달**: `X-Gateway-Internal` 헤더 유무로 접근 제어
+- [ ] **사용자 헤더 전달**: JWT 검증 성공 시 `X-User-Id`, `X-User-Roles`, `X-Token-Issuer` 전달
+
+### 8.5 라우팅 매핑 검증
+- [ ] **네임스페이스 매핑**: `/api/news/*` → `8080/api/articles/*`
+- [ ] **버전 매핑**: `/api/auth/*` → `8001/api/v1/auth/*`
+- [ ] **라우팅 우선순위**: order 1-7 순서대로 정상 작동
+
+> **💡 빠른 테스트 방법**: `./scripts/gateway-routes-info.sh` 스크립트를 실행하면 위 대부분의 항목을 자동으로 확인할 수 있습니다.

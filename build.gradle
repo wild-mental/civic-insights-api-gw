@@ -22,6 +22,9 @@ dependencyManagement {
 dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    
+    // Actuator for monitoring and management endpoints
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
     // JWT 검증용
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'

@@ -877,14 +877,21 @@ logging:
     org.springframework.cloud.gateway.filter: TRACE
 ```
 
-#### Gateway 정보 확인
+#### Gateway 라우팅 정보 확인
 ```bash
-# 현재 라우트 목록
-curl http://localhost:8000/actuator/gateway/routes
+# 자동화된 라우팅 정보 조회 (권장)
+./scripts/gateway-routes-info.sh
 
-# 필터 목록
-curl http://localhost:8000/actuator/gateway/globalfilters
+# 수동 라우팅 정보 확인
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.routes.count" | jq .
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | jq .
+
+# 라우트 ID 목록
+curl -s "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | \
+  jq -r '.availableTags[] | select(.tag == "routeId") | .values[]'
 ```
+
+> **참고**: Spring Cloud Gateway 2025.0.0에서는 기본 `actuator/gateway` 엔드포인트가 비활성화되어 있어 `metrics` 엔드포인트를 사용합니다.
 
 ---
 

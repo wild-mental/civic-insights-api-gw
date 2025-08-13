@@ -59,6 +59,9 @@ dependencyManagement {
 dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    
+    // Actuator for monitoring and management endpoints
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
     // JWT 검증용
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
@@ -550,6 +553,17 @@ jwt:
   authService:
     jwksUri: http://localhost:8001/.well-known/jwks.json
 
+# Actuator 설정 (모니터링 및 관리 엔드포인트)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics  # 필요한 엔드포인트만 노출
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+
 # 로깅 설정
 logging:
   level:
@@ -604,17 +618,55 @@ curl http://localhost:8000/api/news/articles/premium -i
 자세한 내용은 프로젝트 `README.md`의 트러블슈팅 섹션을 참조하세요.
 
 ### 8.1 라우팅 확인
-게이트웨이가 실행 중일 때 다음 명령어로 라우팅 상태를 확인할 수 있습니다:
+
+#### A. 자동화된 라우팅 정보 조회 (권장 방법)
+프로젝트에 포함된 스크립트를 사용하면 모든 라우팅 정보를 한번에 확인할 수 있습니다:
 ```bash
-# 게이트웨이 헬스체크
-curl http://localhost:8000/actuator/health
-
-# 등록된 라우트 목록 확인
-curl http://localhost:8000/actuator/gateway/routes | jq .
-
-# 글로벌 필터 목록 확인
-curl http://localhost:8000/actuator/gateway/globalfilters | jq .
+# 전체 라우팅 정보 조회 스크립트 실행
+./scripts/gateway-routes-info.sh
 ```
+
+이 스크립트는 다음 정보를 제공합니다:
+- Gateway 상태 및 등록된 라우트 개수
+- 라우트 ID와 대상 서비스 URI 
+- 실제 라우팅 매핑 테스트 결과
+- 요청 통계 정보
+
+#### B. 수동 라우팅 정보 조회
+개별적으로 확인하고 싶다면 다음 명령어들을 사용하세요:
+
+```bash
+# 1. Gateway 기본 상태 확인
+curl http://localhost:8000/actuator/health | jq .
+curl http://localhost:8000/actuator | jq .
+
+# 2. Gateway 메트릭을 통한 라우팅 정보 확인
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.routes.count" | jq .
+curl "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | jq .
+
+# 3. 라우트 ID 목록 확인
+curl -s "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | \
+  jq -r '.availableTags[] | select(.tag == "routeId") | .values[]'
+
+# 4. 대상 서비스 URI 목록 확인  
+curl -s "http://localhost:8000/actuator/metrics/spring.cloud.gateway.requests" | \
+  jq -r '.availableTags[] | select(.tag == "routeUri") | .values[]'
+```
+
+#### C. 실제 라우팅 매핑 테스트
+```bash
+# 외부 API → 내부 서비스 매핑 테스트
+curl -i http://localhost:8000/.well-known/jwks.json     # → http://localhost:8001
+curl -i http://localhost:8000/api/news/articles         # → http://localhost:8080/api/articles  
+curl -i http://localhost:8000/api/news/articles/premium # → http://localhost:8080/api/articles/premium
+curl -i http://localhost:8000/api/auth/google           # → http://localhost:8001/api/v1/auth/google
+curl -i http://localhost:8000/api/auth/profile          # → http://localhost:8001/api/v1/profile (인증 필요)
+```
+
+> **💡 Spring Cloud Gateway 2025.0.0 특징**: 
+> - 기본 `actuator/gateway` 엔드포인트는 비활성화되어 있습니다
+> - 대신 `actuator/metrics` 을 통해 라우팅 정보를 얻을 수 있습니다
+> - 실제 라우팅 테스트가 가장 확실한 검증 방법입니다
 
 ---
 
@@ -650,14 +702,19 @@ curl http://localhost:8000/actuator/gateway/globalfilters | jq .
 
 ## 부록 A. 유용한 확인 명령어
 ```bash
-# 라우트 목록
-curl http://localhost:8000/actuator/gateway/routes | jq .
+# 게이트웨이 상태 확인
+curl http://localhost:8000/actuator/health | jq .
 
-# 글로벌/로컬 필터 목록
-curl http://localhost:8000/actuator/gateway/globalfilters | jq .
+# 사용 가능한 엔드포인트 목록
+curl http://localhost:8000/actuator | jq .
 
 # 메트릭 확인
 curl http://localhost:8000/actuator/metrics | jq .
+
+# 실제 라우팅 동작 테스트
+curl -v http://localhost:8000/api/news/articles  # 뉴스 서비스 라우팅
+curl -v http://localhost:8000/api/auth/google    # 인증 서비스 라우팅
+curl -v http://localhost:8000/.well-known/jwks.json  # JWKS 엔드포인트
 ```
 
 ## 부록 B. 학습 체크리스트
