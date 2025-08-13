@@ -61,8 +61,8 @@ Civic Insights API Gateway는 마이크로서비스 환경에서 단일 진입�
 - **Spring Cloud Gateway** 2025.0.0
 - **Spring Boot** 3.5.4
 - **WebFlux** (비동기 리액티브 프로그래밍)
-- **JWT** (JSON Web Tokens)
-- **JWK** (JSON Web Key)
+- **JWT** (JSON Web Tokens) - jjwt 0.12.6
+- **JWK** (JSON Web Key) - nimbus-jose-jwt 10.4
 
 ---
 
@@ -417,18 +417,35 @@ Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 ```http
 Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 X-User-Id: user123
+X-User-Roles: USER,ADMIN
+X-Token-Issuer: civic-insights
+X-Gateway-Internal: civic-insights-gateway-v1
 ```
+
+> **보안 헤더**: 모든 요청에 `X-Gateway-Internal` 헤더가 자동 추가되어 백엔드 서비스에서 게이트웨이를 통한 요청임을 확인할 수 있습니다.
 
 ### 캐싱 메커니즘
 
 ```java
-// 공개키 캐싱 (성능 최적화)
+// AuthorizationHeaderFilter.java에서 구현된 공개키 캐싱
 private final ConcurrentHashMap<String, PublicKey> keyCache = new ConcurrentHashMap<>();
+private final WebClient webClient = WebClient.create();
+
+// JWKS URI에서 공개키를 가져와 캐시에 저장
+private PublicKey getKey(String kid) {
+    if (keyCache.containsKey(kid)) {
+        return keyCache.get(kid); // 캐시된 키 반환
+    }
+    // JWKS 엔드포인트에서 새로 가져와서 캐시에 저장
+    JWKSet jwkSet = fetchJwkSet();
+    // ...
+}
 ```
 
 - **목적**: JWKS 엔드포인트 호출 횟수 최소화
 - **전략**: kid(Key ID) 기반 캐싱
 - **갱신**: 키를 찾을 수 없을 때 자동 갱신
+- **구현 위치**: `AuthorizationHeaderFilter.java:37,148-176`
 
 ---
 
@@ -574,10 +591,22 @@ curl http://localhost:8000/actuator/health
 #### 의존성
 ```gradle
 dependencies {
-    implementation 'org.springframework.cloud:spring-cloud-starter-gateway'
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    
+    // JWT 검증용
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
     implementation 'com.nimbusds:nimbus-jose-jwt:10.4'
+    
+    // JSON 처리를 위한 Jackson 의존성
+    implementation 'com.fasterxml.jackson.core:jackson-core'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'net.minidev:json-smart:2.5.1'
+    
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 }
 ```
 
@@ -649,25 +678,36 @@ export LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=DEBUG
 
 ### 커스텀 필터 개발
 
-새로운 필터를 추가하려면:
+현재 구현된 **AuthorizationHeaderFilter**를 참고하여 새로운 필터를 추가할 수 있습니다:
 
 ```java
 @Component
+@Slf4j
 public class CustomFilter extends AbstractGatewayFilterFactory<CustomFilter.Config> {
+    
+    public CustomFilter() {
+        super(Config.class);
+    }
     
     @Override
     public GatewayFilter apply(Config config) {
         return (exchange, chain) -> {
+            ServerHttpRequest request = exchange.getRequest();
             // 필터 로직 구현
             return chain.filter(exchange);
         };
     }
     
     public static class Config {
-        // 설정 프로퍼티
+        // 설정 프로퍼티 (AuthorizationHeaderFilter.Config 참고)
+        private String realm = "civic-insights";
+        private boolean includeErrorDetails = true;
+        // getter/setter 메서드
     }
 }
 ```
+
+**참고**: `AuthorizationHeaderFilter.java`는 완전한 JWT 검증 필터 구현 예제를 제공합니다.
 
 ---
 
@@ -675,52 +715,63 @@ public class CustomFilter extends AbstractGatewayFilterFactory<CustomFilter.Conf
 
 ### 자주 발생하는 문제들
 
-#### 1. **Null Pointer Exception (JWT 헤더)**
+#### 1. **JWT 토큰 검증 오류**
 
-**증상**: Authorization 헤더가 있는데도 NullPointerException 발생
+**증상**: Authorization 헤더 관련 검증 실패
 ```
-Potential null pointer access: The method get(Object) may return null
+{"error":"invalid_request","error_description":"Invalid Authorization header format"}
 ```
 
-**원인**: 
-- `request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0)` 에서 빈 리스트 반환 시 null 접근
-
-**해결방법**:
+**현재 구현된 검증 로직** (`AuthorizationHeaderFilter.java:50-70`):
 ```java
-// 기존 (문제 있는 코드)
-String authorizationHeader = request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0);
+// 1. Authorization 헤더 존재 확인
+if (!request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
+    return onError(exchange, "Missing Authorization header", 
+                 HttpStatus.UNAUTHORIZED, "missing_token");
+}
 
-// 수정된 코드 (안전한 접근)
+// 2. 안전한 헤더 접근
 String authorizationHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-if (authorizationHeader == null) {
-    return onError(exchange, "Invalid authorization header", HttpStatus.UNAUTHORIZED);
+
+// 3. Bearer 형식 검증
+if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+    return onError(exchange, "Invalid Authorization header format", 
+                 HttpStatus.UNAUTHORIZED, "invalid_request");
 }
 ```
 
-> **💡 팁**: `getFirst()` 메서드는 Spring의 HttpHeaders에서 제공하는 안전한 헤더 접근 방법입니다.
+**해결방법**: 현재 구현은 이미 안전한 방식으로 되어 있으며, RFC 7235 표준을 준수하는 에러 응답을 제공합니다.
 
 #### 2. **401 Unauthorized 에러**
 
 **증상**: JWT 토큰이 있는데도 인증 실패
-```
-{"timestamp":"2024-01-01T12:00:00.000Z","status":401,"error":"Unauthorized"}
+```json
+{
+  "error": "token_expired",
+  "error_description": "Token has expired",
+  "status": 401,
+  "timestamp": "2024-01-01T12:00:00.000Z",
+  "path": "API Gateway Authentication"
+}
 ```
 
-**원인**: 
-- JWT 토큰 만료
-- 잘못된 서명
-- JWKS 공개키 불일치
+**현재 구현된 에러 분류** (`AuthorizationHeaderFilter.java:262-284`):
+- `token_expired`: 토큰 만료
+- `invalid_signature`: 서명 검증 실패
+- `malformed_token`: 토큰 형식 오류
+- `invalid_key`: 공개키 문제
+- `invalid_issuer`: 발급자 불일치
 
 **해결방법**:
 ```bash
-# 1. 토큰 유효성 확인
-jwt decode $TOKEN
-
-# 2. JWKS 엔드포인트 확인
+# 1. JWKS 엔드포인트 확인
 curl http://localhost:8001/.well-known/jwks.json
 
-# 3. 새 토큰 발급
-curl -X POST http://localhost:8000/api/auth/refresh?refreshToken=$REFRESH_TOKEN
+# 2. 새 토큰 발급
+curl -X POST http://localhost:8000/api/auth/refresh
+
+# 3. 토큰 디버깅 (jwt.io 사용)
+echo $TOKEN | base64 -d
 ```
 
 #### 2. **라우팅 실패 (404 Not Found)**

@@ -496,7 +496,7 @@ spring:
               predicates:
                 - Path=/api/news/articles/premium/**
               filters:
-                - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/${segment}
+                - RewritePath=/api/news/articles/premium/(?<segment>.*), /api/articles/premium/$\{segment}
                 - name: AuthorizationHeaderFilter
                 - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 3
@@ -508,7 +508,7 @@ spring:
                 - Path=/api/news/articles/**
                 - Method=POST,PUT,DELETE
               filters:
-                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/${segment}
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
                 - name: AuthorizationHeaderFilter
                 - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 4
@@ -519,7 +519,7 @@ spring:
               predicates:
                 - Path=/api/news/articles/**
               filters:
-                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/${segment}
+                - RewritePath=/api/news/articles/(?<segment>.*), /api/articles/$\{segment}
                 - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 5
 
@@ -530,7 +530,7 @@ spring:
               predicates:
                 - Path=/api/auth/profile/**
               filters:
-                - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/${segment}
+                - RewritePath=/api/auth/profile/(?<segment>.*), /api/v1/profile/$\{segment}
                 - name: AuthorizationHeaderFilter
                 - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 6
@@ -541,7 +541,7 @@ spring:
               predicates:
                 - Path=/api/auth/**
               filters:
-                - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/${segment}
+                - RewritePath=/api/auth/(?<segment>.*), /api/v1/auth/$\{segment}
                 - AddRequestHeader=X-Gateway-Internal, ${GATEWAY_SECRET_TOKEN:civic-insights-gateway-v1}
               order: 7
 
@@ -582,6 +582,7 @@ logging:
 토큰이 있을 때:
 ```bash
 # 예: 프리미엄 상세(토큰 필요)
+TOKEN="your_jwt_token_here"
 curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:8000/api/news/articles/premium/123 -i
 ```
@@ -601,6 +602,19 @@ curl http://localhost:8000/api/news/articles/premium -i
 - JWKS 파싱/네트워크 오류: 인증 서비스 구동 여부와 URL 확인
 
 자세한 내용은 프로젝트 `README.md`의 트러블슈팅 섹션을 참조하세요.
+
+### 8.1 라우팅 확인
+게이트웨이가 실행 중일 때 다음 명령어로 라우팅 상태를 확인할 수 있습니다:
+```bash
+# 게이트웨이 헬스체크
+curl http://localhost:8000/actuator/health
+
+# 등록된 라우트 목록 확인
+curl http://localhost:8000/actuator/gateway/routes | jq .
+
+# 글로벌 필터 목록 확인
+curl http://localhost:8000/actuator/gateway/globalfilters | jq .
+```
 
 ---
 
@@ -626,6 +640,13 @@ curl http://localhost:8000/api/news/articles/premium -i
 본 교안의 코드 블록은 모두 실제 파일과 동일합니다. 그대로 복사/붙여넣기 하여 완전한 구현을 진행할 수 있습니다.
 
 ---
+
+## 부록 C. End-to-End 테스트 가이드(요약)
+초심자용 전체 테스트 흐름은 `04_API_GW_BASED_AUTH_AND_NEWS_SVC_FLOW_TEST.md`를 참고하세요. 요약:
+- 공개 목록: `GET http://localhost:8000/api/news/articles/premium` → 200
+- 보호 상세(미인증): `GET http://localhost:8000/api/news/articles/premium/1` → 401
+- 보호 상세(인증+PAID_USER): `GET ... -H "Authorization: Bearer $TOKEN"` → 200
+- 백엔드 직접 호출: `GET http://localhost:8080/api/articles` → 403 (GatewayOnlyFilter)
 
 ## 부록 A. 유용한 확인 명령어
 ```bash
